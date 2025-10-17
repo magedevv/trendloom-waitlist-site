@@ -261,6 +261,22 @@
       .dot{ animation:none }
       .cta::before, .cta::after{ animation:none !important }
     }
+
+    /* =========================
+       ⚡ Mobile performance mode
+       (iOS n'aime pas grain+blur+FX à fond)
+    ========================== */
+    @media (max-width: 768px){
+      .grain{ display:none; }                        /* grain coûteux */
+      .rings svg{ opacity:.45; }                     /* glow réduit */
+      .card{ backdrop-filter:none; background: rgba(255,255,255,.04); } /* blur off */
+      .shimmer::after{ display:none; }               /* shimmer off */
+    }
+
+    /* ⚡ Quand on tape dans l'input : coupe tous les FX pour une saisie ultra fluide */
+    .noFX .grain,
+    .noFX #fx,
+    .noFX .rings { display:none !important; }
   </style>
 </head>
 <body>
@@ -367,6 +383,7 @@
 
   /* =========================================================
      FORM: email validation + Supabase INSERT
+     + pause FX when typing on mobile (iOS perf)
   ========================================================== */
   (function formLogic(){
     const form   = document.getElementById('waitlist');
@@ -379,6 +396,14 @@
       status.textContent = msg;
       status.className = 'note ' + (ok ? 'ok' : (msg ? 'err' : ''));
     }
+
+    // Pause all FX while the keyboard is open (focus)
+    email.addEventListener('focus', () => {
+      document.documentElement.classList.add('noFX');
+    });
+    email.addEventListener('blur', () => {
+      document.documentElement.classList.remove('noFX');
+    });
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -402,7 +427,6 @@
           }]);
 
           if (error) {
-            // Handle duplicate constraint or generic error
             const dup = (error.code === '23505') ||
                         String(error.message||'').toLowerCase().includes('duplicate');
             setStatus(dup ? "That email is already on the list." : "Signup failed — please try again.");
@@ -429,19 +453,24 @@
 
   /* =========================================================
      CANVAS PARTICLES (low-cost, parallax-reactive)
+     — mobile-optimized (fewer nodes, 30fps, no gyro)
   ========================================================== */
   (function particles(){
     const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if(prefersReduced) return; // respect user's motion preference
 
+    const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ||
+                      window.matchMedia('(max-width: 768px)').matches;
+
     const canvas = document.getElementById('fx');
     const ctx = canvas.getContext('2d', { alpha:true });
 
-    const DPR = Math.min(2, window.devicePixelRatio || 1);
+    const DPR = IS_MOBILE ? 1 : Math.min(2, window.devicePixelRatio || 1);
     let W=0, H=0, cx=0, cy=0;
 
-    const NODES = 110;                 // number of particles
-    const MAX_LINK_DIST = 150;         // px
+    const NODES = IS_MOBILE ? 55 : 110;         // fewer on mobile
+    const MAX_LINK_DIST = IS_MOBILE ? 110 : 150;
+
     const nodes = [];
     let pointer = { x: 0, y: 0, tx: 0, ty: 0 };
 
@@ -467,7 +496,7 @@
       });
     }
 
-    // Pointer parallax
+    // Pointer parallax (mouse/touch). No gyro on mobile (costly on iOS)
     let lastMove = 0;
     window.addEventListener('pointermove', (e)=>{
       const now = performance.now();
@@ -477,24 +506,22 @@
       pointer.ty = e.clientY;
     }, { passive:true });
 
-    // Gyro support (mobile)
-    if (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === 'function') {
-      window.addEventListener('click', async ()=>{
-        try { await DeviceOrientationEvent.requestPermission(); } catch {}
-      }, { once:true });
-    } else if (window.DeviceOrientationEvent) {
-      window.addEventListener('deviceorientation', (e)=>{
-        const ax = clamp((e.gamma || 0)/45, -1, 1);
-        const ay = clamp((e.beta || 0)/45, -1, 1);
-        pointer.tx = cx + ax * (W*0.2);
-        pointer.ty = cy + ay * (H*0.2);
-      }, { passive:true });
-    }
+    // Animation loop (30fps on mobile, 60 on desktop)
+    let lastT = 0;
+    function tick(t){
+      // If user is typing, skip all drawing for buttery input
+      if (document.documentElement.classList.contains('noFX')) {
+        raf = requestAnimationFrame(tick);
+        return;
+      }
+      if (IS_MOBILE && t - lastT < 33) { // ~30fps
+        raf = requestAnimationFrame(tick);
+        return;
+      }
+      lastT = t;
 
-    // Animation loop
-    function tick(){
-      pointer.x = lerp(pointer.x, pointer.tx || cx, 0.06);
-      pointer.y = lerp(pointer.y, pointer.ty || cy, 0.06);
+      pointer.x = lerp(pointer.x || cx, pointer.tx || cx, 0.06);
+      pointer.y = lerp(pointer.y || cy, pointer.ty || cy, 0.06);
 
       ctx.clearRect(0,0,W,H);
 
@@ -535,10 +562,6 @@
       raf = requestAnimationFrame(tick);
     }
     let raf = requestAnimationFrame(tick);
-
-    // Kill on reduce motion toggled at runtime
-    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
-    mq.addEventListener?.('change', (e)=>{ if(e.matches){ cancelAnimationFrame(raf); } });
   })();
 
   /* =========================================================
